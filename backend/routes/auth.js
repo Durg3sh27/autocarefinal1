@@ -1,18 +1,21 @@
 const express = require('express');
 const router = express.Router();
-// const bcrypt = require('bcryptjs'); ❌ removed
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../db/connection');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'garageiq_super_secret_2024';
 const JWT_EXPIRES = '7d';
 
+
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required.' });
+    return res.status(400).json({
+      error: 'Email and password are required.'
+    });
   }
 
   try {
@@ -22,92 +25,153 @@ router.post('/login', async (req, res) => {
     );
 
     if (rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
+      return res.status(401).json({
+        error: 'Invalid email or password.'
+      });
     }
 
     const user = rows[0];
 
-    // ✅ plain text comparison
-    if (password !== user.password) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
+    // Secure password comparison
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if (!isMatch) {
+      return res.status(401).json({
+        error: 'Invalid email or password.'
+      });
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, name: user.name, role: user.role },
+      {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role
+      },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES }
     );
 
     res.json({
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
     });
+
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Login Error:', err.message);
+    res.status(500).json({
+      error: 'Server error during login.'
+    });
   }
 });
+
 
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
   const { name, email, password } = req.body;
 
   if (!name || !email || !password) {
-    return res.status(400).json({ error: 'Name, email and password are required.' });
+    return res.status(400).json({
+      error: 'Name, email and password are required.'
+    });
   }
 
   if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    return res.status(400).json({
+      error: 'Password must be at least 6 characters.'
+    });
   }
 
   try {
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanName = name.trim();
+
     const [existing] = await pool.query(
       'SELECT id FROM users WHERE email = ?',
-      [email.toLowerCase().trim()]
+      [cleanEmail]
     );
 
     if (existing.length > 0) {
-      return res.status(409).json({ error: 'An account with this email already exists.' });
+      return res.status(409).json({
+        error: 'An account with this email already exists.'
+      });
     }
 
-    // ✅ store plain password
+    // Secure password hashing
+    const hashedPassword = await bcrypt.hash(password, 10);
+
     const [result] = await pool.query(
       'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
-      [name.trim(), email.toLowerCase().trim(), password, 'user']
+      [cleanName, cleanEmail, hashedPassword, 'user']
     );
 
     const token = jwt.sign(
-      { id: result.insertId, email: email.toLowerCase().trim(), name: name.trim(), role: 'user' },
+      {
+        id: result.insertId,
+        email: cleanEmail,
+        name: cleanName,
+        role: 'user'
+      },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES }
     );
 
     res.status(201).json({
       token,
-      user: { id: result.insertId, name: name.trim(), email: email.toLowerCase().trim(), role: 'user' },
+      user: {
+        id: result.insertId,
+        name: cleanName,
+        email: cleanEmail,
+        role: 'user'
+      }
     });
+
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Register Error:', err.message);
+    res.status(500).json({
+      error: 'Server error during registration.'
+    });
   }
 });
 
-// GET /api/auth/me — verify token & return user
+
+// GET /api/auth/me
 router.get('/me', async (req, res) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'No token' });
+
+  if (!token) {
+    return res.status(401).json({
+      error: 'No token provided.'
+    });
+  }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+
     const [rows] = await pool.query(
       'SELECT id, name, email, role, created_at FROM users WHERE id = ?',
       [decoded.id]
     );
 
-    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    if (rows.length === 0) {
+      return res.status(404).json({
+        error: 'User not found.'
+      });
+    }
 
     res.json(rows[0]);
-  } catch {
-    res.status(403).json({ error: 'Invalid token' });
+
+  } catch (err) {
+    console.error('Token Verification Error:', err.message);
+    res.status(403).json({
+      error: 'Invalid token.'
+    });
   }
 });
 
