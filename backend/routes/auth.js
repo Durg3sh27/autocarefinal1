@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../db/connection');
 
@@ -32,10 +31,8 @@ router.post('/login', async (req, res) => {
 
     const user = rows[0];
 
-    // Secure password comparison
-    const isMatch = await bcrypt.compare(password, user.password);
-
-    if (!isMatch) {
+    // Plain text password comparison
+    if (password !== user.password) {
       return res.status(401).json({
         error: 'Invalid email or password.'
       });
@@ -102,12 +99,10 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // Secure password hashing
-    const hashedPassword = await bcrypt.hash(password, 10);
-
+    // Store plain text password
     const [result] = await pool.query(
       'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
-      [cleanName, cleanEmail, hashedPassword, 'user']
+      [cleanName, cleanEmail, password, 'user']
     );
 
     const token = jwt.sign(
